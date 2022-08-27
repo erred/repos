@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,7 +41,7 @@ func run(args []string) error {
 	cmds := map[string]func([]string) error{
 		// "status": cmdStatus,
 		"sync": cmdSync,
-		"tmp":  cmdTmp,
+		"last": cmdLast,
 		"new":  cmdNew,
 	}
 
@@ -148,7 +149,7 @@ func syncRepo(dir string) syncResult {
 		return res
 	}
 
-	defaultBranch := string(bytes.TrimSpace(out))
+	defaultBranch := path.Base(string(bytes.TrimSpace(out)))
 
 	cmd = exec.Command("git", "checkout", defaultBranch)
 	cmd.Dir = wd
@@ -297,7 +298,7 @@ func newTestrepoVersion() (string, error) {
 	return name, nil
 }
 
-func cmdTmp([]string) error {
+func cmdLast([]string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("tmp: get home directory: %w", err)
