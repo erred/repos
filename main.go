@@ -2,21 +2,26 @@ package main
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
 
-	"golang.org/x/exp/maps"
+	"github.com/google/go-github/v47/github"
+	"golang.org/x/oauth2"
 )
 
 var (
@@ -30,36 +35,66 @@ var (
 )
 
 func main() {
-	err := run(os.Args)
-	if err != nil {
+	err := run(os.Args, os.Stdout, os.Stderr)
+	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
-	cmds := map[string]func([]string) error{
-		// "status": cmdStatus,
-		"sync": cmdSync,
-		"last": cmdLast,
-		"new":  cmdNew,
+func run(args []string, outEval, outLog io.Writer) error {
+	cmds := map[string]func(args []string, eval, log io.Writer) error{
+		"sync-github": cmdSyncGtihub,
+		"sync":        cmdSync,
+		"last":        cmdLast,
+		"new":         cmdNew,
 	}
 
-	args = args[1:]
-	if len(args) == 0 {
-		return fmt.Errorf("missing command: %v", maps.Keys(cmds))
+	fset := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fset.SetOutput(outLog)
+	fset.Usage = func() {
+		fmt.Fprintf(outLog, `manage local repositories
+
+USAGE:
+  repos last
+  repos new [repo-name]
+  repos sync
+
+OPTIONS:
+`)
+		fset.PrintDefaults()
 	}
-	cmd, ok := cmds[args[0]]
-	if !ok {
-		return fmt.Errorf("command %v not in %v", args[0], maps.Keys(cmds))
+	err := fset.Parse(args[1:])
+	cmd, ok := cmds[fset.Arg(0)]
+	if err != nil || !ok {
+		fset.PrintDefaults()
+		return err
 	}
 
-	return cmd(args[1:])
+	return cmd(fset.Args(), outEval, outLog)
 }
 
-func cmdSync([]string) error {
-	baseDir := "."
+func cmdSync(args []string, outEval, outLog io.Writer) error {
 	parallel := 5
+	fset := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fset.SetOutput(outLog)
+	fset.Usage = func() {
+		fmt.Fprintf(outLog, `pull in updates from remote repos
+
+USAGE:
+  repos sync
+
+OPTIONS:
+`)
+		fset.PrintDefaults()
+	}
+	fset.IntVar(&parallel, "parallel", 5, "parallel downloads")
+	err := fset.Parse(args[1:])
+	if err != nil {
+		return err
+	}
+
+	baseDir := "."
 
 	des, err := os.ReadDir(baseDir)
 	if err != nil {
@@ -94,7 +129,7 @@ func cmdSync([]string) error {
 		} else {
 			msg += res.oldRef + " -> " + res.newRef
 		}
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprintln(outLog, msg)
 	}
 	return nil
 }
@@ -190,14 +225,26 @@ const (
 	versionFile = "testrepo-version"
 )
 
-func cmdNew(args []string) error {
+func cmdNew(args []string, outEval, outLog io.Writer) error {
 	var baseDir, name string
-	if len(args) > 1 {
-		return fmt.Errorf("unexpected extra args: %v", args[2:])
-	} else if len(args) == 1 {
-		name = args[0]
-		baseDir, _ = os.Getwd()
-	} else {
+	fset := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fset.SetOutput(outLog)
+	fset.Usage = func() {
+		fmt.Fprintf(outLog, `create new repositories
+
+USAGE:
+  repos new [repo-name]
+
+OPTIONS:
+`)
+		fset.PrintDefaults()
+	}
+	err := fset.Parse(args[1:])
+	if err != nil {
+		return err
+	}
+	switch fset.NArg() {
+	case 0:
 		n, err := newTestrepoVersion()
 		if err != nil {
 			return fmt.Errorf("new: get testrepo version: %w", err)
@@ -209,11 +256,16 @@ func cmdNew(args []string) error {
 			return fmt.Errorf("new: get home dir: %w", err)
 		}
 		baseDir = filepath.Join(homeDir, "tmp")
+	case 1:
+		name = args[0]
+		baseDir, _ = os.Getwd()
+	default:
+		return fmt.Errorf("unexpected extra args: %v", args[2:])
 	}
 
 	fp := filepath.Join(baseDir, name)
 
-	err := os.MkdirAll(fp, 0o755)
+	err = os.MkdirAll(fp, 0o755)
 	if err != nil {
 		return fmt.Errorf("new: mkdir %s: %w", fp, err)
 	}
@@ -272,7 +324,7 @@ func cmdNew(args []string) error {
 		return fmt.Errorf("new tmp: render readme: %w", err)
 	}
 
-	fmt.Printf("cd %s\n", fp)
+	fmt.Fprintf(outEval, "cd %s\n", fp)
 	return nil
 }
 
@@ -298,7 +350,26 @@ func newTestrepoVersion() (string, error) {
 	return name, nil
 }
 
-func cmdLast([]string) error {
+func cmdLast(args []string, outEval, outLog io.Writer) error {
+	fset := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fset.SetOutput(outLog)
+	fset.Usage = func() {
+		fmt.Fprintf(outLog, `switch to the last created temporary repository
+
+USAGE:
+  repos last
+
+OPTIONS:
+`)
+		fset.PrintDefaults()
+	}
+	err := fset.Parse(args[1:])
+	if err != nil {
+		return err
+	} else if fset.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments: %v", fset.Args())
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("tmp: get home directory: %w", err)
@@ -319,5 +390,134 @@ func cmdLast([]string) error {
 	}
 
 	fmt.Printf("cd %s\n", filepath.Join(tmpDir, last))
+	return nil
+}
+
+func cmdSyncGtihub(args []string, outEval, outLog io.Writer) error {
+	var archived, worktree, prune, dryrun bool
+	var tokenEnv string
+	fset := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fset.SetOutput(outLog)
+	fset.Usage = func() {
+		fmt.Fprintf(outLog, `sync the local repo list from github
+
+USAGE:
+  repos github-sync [user/orgs...]
+
+OPTIONS:
+`)
+		fset.PrintDefaults()
+	}
+	flag.BoolVar(&archived, "archived", false, "include archived repositories")
+	flag.BoolVar(&dryrun, "dryrun", false, "print actions instead of executing them")
+	flag.BoolVar(&prune, "prune", false, "prune repositories not found on the remote")
+	flag.BoolVar(&worktree, "worktree", false, "nest checkouts under repo/default")
+	flag.StringVar(&tokenEnv, "token-env", "GH_TOKEN", "env var to read github token from")
+	err := fset.Parse(args[1:])
+	if err != nil {
+		return err
+	} else if fset.NArg() == 0 {
+		return fmt.Errorf("no users/orgs provided")
+	}
+
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: os.Getenv(tokenEnv)},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	allReposM := make(map[string]string)
+	for _, group := range fset.Args() {
+		for page := 1; true; page++ {
+			repos, res, err := client.Repositories.List(ctx, group, &github.RepositoryListOptions{
+				ListOptions: github.ListOptions{
+					Page:    page,
+					PerPage: 100,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("list repos page %d for %s: %v", page, group, err)
+			}
+			for _, repo := range repos {
+				if !archived && *repo.Archived {
+					continue
+				}
+				allReposM[*repo.Name] = *repo.Owner.Login
+			}
+			if page >= res.LastPage {
+				break
+			}
+		}
+	}
+
+	localRepoM := make(map[string]struct{})
+	des, err := os.ReadDir(".")
+	if err != nil {
+		return fmt.Errorf("read .: %w", err)
+	}
+	for _, de := range des {
+		if !de.IsDir() {
+			continue
+		}
+		localRepoM[de.Name()] = struct{}{}
+	}
+
+	var toClone []struct {
+		owner, repo string
+	}
+	for k, v := range allReposM {
+		if _, ok := localRepoM[k]; !ok {
+			toClone = append(toClone, struct {
+				owner string
+				repo  string
+			}{
+				v, k,
+			})
+		}
+	}
+	sort.Slice(toClone, func(i, j int) bool {
+		if toClone[i].owner != toClone[j].owner {
+			return toClone[i].owner < toClone[j].owner
+		}
+		return toClone[i].repo < toClone[j].repo
+	})
+	var toPrune []string
+	for r := range localRepoM {
+		if _, ok := allReposM[r]; !ok {
+			toPrune = append(toPrune, r)
+		}
+	}
+	sort.Strings(toPrune)
+
+	for _, r := range toClone {
+		u := fmt.Sprintf("https://github.com/%s/%s", r.owner, r.repo)
+		dst := r.repo
+		if worktree {
+			dst += "/default"
+		}
+		msg := "git clone " + u + " " + dst
+		if worktree {
+			msg += "/default"
+		}
+		if !dryrun {
+			cmd := exec.Command("git", "clone", u, dst)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				msg += ": " + err.Error() + "\n" + string(out)
+			}
+		}
+		fmt.Fprintln(outLog, msg)
+	}
+	for _, r := range toPrune {
+		msg := "rm -rf %s"
+		if !dryrun {
+			err := os.RemoveAll(r)
+			if err != nil {
+				msg += ": " + err.Error()
+			}
+		}
+		fmt.Fprintln(outLog, msg)
+	}
 	return nil
 }
