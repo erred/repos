@@ -59,6 +59,7 @@ USAGE:
   repos last
   repos new [repo-name]
   repos sync
+  repos sync-github
 
 OPTIONS:
 `)
@@ -257,7 +258,7 @@ OPTIONS:
 		}
 		baseDir = filepath.Join(homeDir, "tmp")
 	case 1:
-		name = args[0]
+		name = fset.Arg(0)
 		baseDir, _ = os.Getwd()
 	default:
 		return fmt.Errorf("unexpected extra args: %v", args[2:])
@@ -396,6 +397,7 @@ OPTIONS:
 func cmdSyncGtihub(args []string, outEval, outLog io.Writer) error {
 	var archived, worktree, prune, dryrun bool
 	var tokenEnv string
+	var users, orgs []string
 	fset := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	fset.SetOutput(outLog)
 	fset.Usage = func() {
@@ -408,16 +410,25 @@ OPTIONS:
 `)
 		fset.PrintDefaults()
 	}
-	flag.BoolVar(&archived, "archived", false, "include archived repositories")
-	flag.BoolVar(&dryrun, "dryrun", false, "print actions instead of executing them")
-	flag.BoolVar(&prune, "prune", false, "prune repositories not found on the remote")
-	flag.BoolVar(&worktree, "worktree", false, "nest checkouts under repo/default")
-	flag.StringVar(&tokenEnv, "token-env", "GH_TOKEN", "env var to read github token from")
+	fset.BoolVar(&archived, "archived", false, "include archived repositories")
+	fset.BoolVar(&dryrun, "dryrun", false, "print actions instead of executing them")
+	fset.BoolVar(&prune, "prune", false, "prune repositories not found on the remote")
+	fset.BoolVar(&worktree, "worktree", false, "nest checkouts under repo/default")
+	fset.StringVar(&tokenEnv, "token-env", "GH_TOKEN", "env var to read github token from")
+	fset.Func("user", "github user", func(s string) error {
+		users = append(users, s)
+		return nil
+	})
+	fset.Func("org", "github org", func(s string) error {
+		orgs = append(orgs, s)
+		return nil
+	})
+
 	err := fset.Parse(args[1:])
 	if err != nil {
 		return err
-	} else if fset.NArg() == 0 {
-		return fmt.Errorf("no users/orgs provided")
+	} else if fset.NArg() > 0 {
+		return fmt.Errorf("unexpected args: %v", fset.Args())
 	}
 
 	ctx := context.Background()
@@ -428,16 +439,38 @@ OPTIONS:
 	client := github.NewClient(tc)
 
 	allReposM := make(map[string]string)
-	for _, group := range fset.Args() {
+	for _, user := range users {
 		for page := 1; true; page++ {
-			repos, res, err := client.Repositories.List(ctx, group, &github.RepositoryListOptions{
+			repos, res, err := client.Repositories.List(ctx, user, &github.RepositoryListOptions{
 				ListOptions: github.ListOptions{
 					Page:    page,
 					PerPage: 100,
 				},
 			})
 			if err != nil {
-				return fmt.Errorf("list repos page %d for %s: %v", page, group, err)
+				return fmt.Errorf("list repos page %d for %s: %v", page, user, err)
+			}
+			for _, repo := range repos {
+				if !archived && *repo.Archived {
+					continue
+				}
+				allReposM[*repo.Name] = *repo.Owner.Login
+			}
+			if page >= res.LastPage {
+				break
+			}
+		}
+	}
+	for _, org := range orgs {
+		for page := 1; true; page++ {
+			repos, res, err := client.Repositories.ListByOrg(ctx, org, &github.RepositoryListByOrgOptions{
+				ListOptions: github.ListOptions{
+					Page:    page,
+					PerPage: 100,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("list repos page %d for %s: %v", page, org, err)
 			}
 			for _, repo := range repos {
 				if !archived && *repo.Archived {
@@ -497,9 +530,6 @@ OPTIONS:
 			dst += "/default"
 		}
 		msg := "git clone " + u + " " + dst
-		if worktree {
-			msg += "/default"
-		}
 		if !dryrun {
 			cmd := exec.Command("git", "clone", u, dst)
 			out, err := cmd.CombinedOutput()
@@ -510,7 +540,7 @@ OPTIONS:
 		fmt.Fprintln(outLog, msg)
 	}
 	for _, r := range toPrune {
-		msg := "rm -rf %s"
+		msg := "rm -rf " + r
 		if !dryrun {
 			err := os.RemoveAll(r)
 			if err != nil {
