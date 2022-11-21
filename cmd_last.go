@@ -18,7 +18,7 @@ func (c lastCmd) Synopsis() string            { return "jumps to the most recent
 func (c lastCmd) Usage() string               { return "repos last\n" }
 func (c lastCmd) SetFlags(fset *flag.FlagSet) {}
 func (c lastCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any) subcommands.ExitStatus {
-	if len(args) > 0 {
+	if fset.NArg() > 0 {
 		fmt.Fprintln(os.Stderr, "repos last: unexpected args:", args)
 		return subcommands.ExitUsageError
 	}

@@ -25,9 +25,9 @@ func (c newCmd) Name() string                { return "new" }
 func (c newCmd) Synopsis() string            { return "create a new repository" }
 func (c newCmd) Usage() string               { return "repos new [repo-name]\n" }
 func (c newCmd) SetFlags(fset *flag.FlagSet) {}
-func (c newCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any) subcommands.ExitStatus {
+func (c newCmd) Execute(ctx context.Context, fset *flag.FlagSet, _ ...any) subcommands.ExitStatus {
 	var base, name string
-	switch len(args) {
+	switch fset.NArg() {
 	case 0:
 		var err error
 		name, err = newTestrepoVersion()
@@ -44,7 +44,7 @@ func (c newCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any) su
 		base = filepath.Join(base, "tmp")
 
 	case 1:
-		name = args[0].(string)
+		name = fset.Arg(0)
 
 		var err error
 		base, err = os.Getwd()
@@ -54,7 +54,7 @@ func (c newCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any) su
 		}
 
 	default:
-		fmt.Fprintln(os.Stderr, "repos new: got args:", args, "expected at most 1")
+		fmt.Fprintln(os.Stderr, "repos new: got args:", fset.NArg(), "expected at most 1")
 		return subcommands.ExitUsageError
 	}
 

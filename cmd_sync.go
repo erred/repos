@@ -38,7 +38,7 @@ func (c *syncCmd) SetFlags(fset *flag.FlagSet) {
 }
 
 func (c syncCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any) subcommands.ExitStatus {
-	if len(args) > 0 {
+	if fset.NArg() > 0 {
 		fmt.Fprintln(os.Stderr, "repos sync: unexpected args:", args)
 		return subcommands.ExitUsageError
 	}

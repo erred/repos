@@ -54,7 +54,7 @@ func (c *syncGHCmd) SetFlags(fset *flag.FlagSet) {
 }
 
 func (c syncGHCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any) subcommands.ExitStatus {
-	if len(args) > 0 {
+	if fset.NArg() > 0 {
 		fmt.Fprintln(os.Stderr, "repos syncgh: unexpected args:", args)
 		return subcommands.ExitUsageError
 	}
