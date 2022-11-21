@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 
@@ -8,12 +9,13 @@ import (
 )
 
 func main() {
-	fset := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-	cmdr := subcommands.NewCommander(fset, os.Args[0])
+	subcommands.Register(subcommands.HelpCommand(), "")
+	subcommands.Register(&syncCmd{}, "")
+	subcommands.Register(&syncGHCmd{}, "")
+	subcommands.Register(&lastCmd{}, "")
+	subcommands.Register(&newCmd{}, "")
 
-	cmdr.Register(cmdr.HelpCommand(), "")
-	cmdr.Register(&syncCmd{}, "")
-	cmdr.Register(&syncGHCmd{}, "")
-	cmdr.Register(&lastCmd{}, "")
-	cmdr.Register(&newCmd{}, "")
+	flag.Parse()
+	ctx := context.Background()
+	os.Exit(int(subcommands.Execute(ctx)))
 }
