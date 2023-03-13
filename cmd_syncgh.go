@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 
 	"github.com/google/go-github/v48/github"
@@ -22,8 +23,10 @@ type syncGHCmd struct {
 	dryRun   bool
 	prune    bool
 	worktree bool
+	sync     bool
 	users    []string
 	orgs     []string
+	exclude  []string
 }
 
 func (c syncGHCmd) Name() string { return "syncgh" }
@@ -43,12 +46,17 @@ func (c *syncGHCmd) SetFlags(fset *flag.FlagSet) {
 	fset.BoolVar(&c.dryRun, "dryrun", false, "print actions instead of executing them")
 	fset.BoolVar(&c.prune, "prune", false, "prune repositories not found on the remote")
 	fset.BoolVar(&c.worktree, "worktree", false, "nest checkouts under repo/default")
+	fset.BoolVar(&c.sync, "sync", false, "sync existing repos")
 	fset.Func("user", "github user", func(s string) error {
 		c.users = append(c.users, s)
 		return nil
 	})
 	fset.Func("org", "github org", func(s string) error {
 		c.orgs = append(c.orgs, s)
+		return nil
+	})
+	fset.Func("exclude", "glob pattern against repo name to exclude, repeatable", func(s string) error {
+		c.exclude = append(c.exclude, s)
 		return nil
 	})
 }
@@ -59,11 +67,26 @@ func (c syncGHCmd) Execute(ctx context.Context, fset *flag.FlagSet, args ...any)
 		return subcommands.ExitUsageError
 	}
 
+	if len(c.orgs)+len(c.users) == 0 {
+		fmt.Fprintln(os.Stderr, "no users or orgs given")
+		return subcommands.ExitUsageError
+	}
+
 	err := c.run(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "repos syncgh:", err)
 		return subcommands.ExitFailure
 	}
+
+	synccmd := syncCmd{
+		parallel: 5,
+	}
+	err = synccmd.run(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "repos sync:", err)
+		return subcommands.ExitFailure
+	}
+
 	return subcommands.ExitSuccess
 }
 
@@ -86,11 +109,9 @@ func (c syncGHCmd) run(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("list repos page %d for %s: %v", page, user, err)
 			}
-			for _, repo := range repos {
-				if !c.archived && *repo.Archived {
-					continue
-				}
-				allReposM[*repo.Name] = *repo.Owner.Login
+			err = c.addRepos(allReposM, repos)
+			if err != nil {
+				return err
 			}
 			if page >= res.LastPage {
 				break
@@ -108,11 +129,9 @@ func (c syncGHCmd) run(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("list repos page %d for %s: %v", page, org, err)
 			}
-			for _, repo := range repos {
-				if !c.archived && *repo.Archived {
-					continue
-				}
-				allReposM[*repo.Name] = *repo.Owner.Login
+			err = c.addRepos(allReposM, repos)
+			if err != nil {
+				return err
 			}
 			if page >= res.LastPage {
 				break
@@ -184,6 +203,25 @@ func (c syncGHCmd) run(ctx context.Context) error {
 			}
 		}
 		fmt.Fprintln(os.Stderr, msg)
+	}
+	return nil
+}
+
+func (c syncGHCmd) addRepos(m map[string]string, repos []*github.Repository) error {
+repoLoop:
+	for _, repo := range repos {
+		if !c.archived && *repo.Archived {
+			continue
+		}
+		for _, pattern := range c.exclude {
+			ok, err := filepath.Match(pattern, *repo.Name)
+			if err != nil {
+				return fmt.Errorf("match exclude pattern %q against %q: %w", pattern, *repo.Name, err)
+			} else if ok {
+				continue repoLoop
+			}
+		}
+		m[*repo.Name] = *repo.Owner.Login
 	}
 	return nil
 }
