@@ -1,8 +1,6 @@
 steps:
   - name: 'ghcr.io/seankhliao/go:tip'
     entrypoint: sh
-    env:
-      - CGO_ENABLED=0
     args:
       - -c
       - |
