@@ -1,5 +1,5 @@
 steps:
-  - name: 'ghcr.io/seankhliao/go:tip'
+  - name: "ghcr.io/seankhliao/go:tip"
     entrypoint: sh
     args:
       - -c

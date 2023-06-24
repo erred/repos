@@ -12,9 +12,10 @@ go install go.seankhliao.com/repos@latest
 ```
 
 With the wrapper:
+
 ```sh
 repos () {
-	local out=$(command repos "$@") 
+	local out=$(command repos "$@")
 	eval "${out}"
 }
 ```
