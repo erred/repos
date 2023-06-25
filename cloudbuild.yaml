@@ -1,9 +1,0 @@
-steps:
-  - name: "ghcr.io/seankhliao/go:tip"
-    entrypoint: sh
-    args:
-      - -c
-      - |
-        go build ./... && \
-        go test -vet=all ./... && \
-        staticcheck ./...
